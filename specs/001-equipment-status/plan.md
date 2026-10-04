@@ -1,5 +1,5 @@
 # Implementation Plan: ตรวจสอบสถานะอุปกรณ์ (Equipment Status)
-Spec: SPEC-EQS-001 (specs/001-equipment-status/spec.md, Draft v2) | Plan status: Draft v1 | Updated: 2569-09-20
+Spec: SPEC-EQS-001 (specs/001-equipment-status/spec.md, Draft v3) | Plan status: Draft v1.1 | Updated: 2569-10-04 (CR-001)
 
 ## 1. Summary
 ฟีเจอร์ read-only ให้ผู้ใช้ที่ยืนยันตัวตนแล้วดูรายการอุปกรณ์แบบ "1 แถว = 1 รุ่น/ชนิด"
@@ -100,9 +100,11 @@ Response (ตัวอย่างแถวรุ่น): `{modelId, name, categ
 - `availableCount` นับเฉพาะ `status='available'` (ไม่นับ pending_approval ตาม FR-09)
 - `availableCount/totalCount` คำนวณจากทั้งรุ่นเสมอ ไม่ถูกลดตามตัวกรอง (ดู Q-P2)
 
-Response (รายชิ้น): `{assetCode, status, expectedReturnDate?, canRequestLoan, borrowerName?}`
+Response (รายชิ้น): `{assetCode, status, expectedReturnDate?, isOverdue?, canRequestLoan, borrowerName?}`
 - `canRequestLoan = (status == 'available')` คำนวณที่ server ตาม FR-04/05/06/09
-- `expectedReturnDate` ส่งเฉพาะ `borrowed`
+- `isOverdue = (status == 'borrowed' && today(Asia/Bangkok) > expectedReturnDate)` คำนวณที่ server (CR-001)
+- `expectedReturnDate` (ระดับวันที่) ส่งเฉพาะ `borrowed`; DTO ของ student **ไม่ส่ง** เมื่อ `isOverdue` (FR-04, CR-001)
+  ส่วน staff/lecturer ได้ทั้งวันที่และ `isOverdue`
 - `borrowerName` **ไม่อยู่ใน DTO ของ student** (แยก struct ตาม role) มีเฉพาะ staff/lecturer (DOM-PRIV-01, FR-07)
 
 Error contract:
@@ -184,13 +186,14 @@ UC-02 ต้องตรวจสถานะซ้ำที่ฝั่งต�
 | AC-EQS-11 | integration | มีแถว audit_log ครบ actor/เวลา/assetCode |
 | AC-EQS-12 | integration + e2e | pending_approval -> ป้ายแยก ไม่นับใน availableCount |
 | AC-EQS-13 | integration | ต่างภาควิชา -> 403 และ body ไม่มีข้อมูลอุปกรณ์ทั้งจาก list และ detail ตรง |
+| AC-EQS-14 | integration + e2e | borrowed เลยกำหนด (fix clock) -> student ได้ `isOverdue` ไม่มี `expectedReturnDate` / staff ได้ทั้งคู่; ป้าย "เลยกำหนดคืน" |
 
 ทดสอบเพิ่ม: DTO นักศึกษา (ไม่หลุดฟิลด์ borrower), `returnTo` ภายนอกระบบถูกปฏิเสธ, SQL injection ผ่าน `q`
 
 ## 8. Milestones
 1. **M1 Data & auth skeleton**: migration + seed 1,000 รายการ, middleware auth -> Principal, healthz
 2. **M2 List/search API**: models + items + filter + department scope (FR-01/02/03/09/10, AC-01/02/03/12/13)
-3. **M3 Detail + role DTO + audit**: FR-04/05/06/07, AC-04/05/06/07/11
+3. **M3 Detail + role DTO + audit**: FR-04/05/06/07, AC-04/05/06/07/11/14
 4. **M4 Web UI**: หน้ารายการ/รายละเอียด, empty/error state, redirect login (AC-08/09), mobile
 5. **M5 Hardening**: k6 load test (AC-10), TLS/proxy, backup, usability test 10 คน (NFR-USE-01)
 
