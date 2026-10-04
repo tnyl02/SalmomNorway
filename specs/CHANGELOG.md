@@ -3,22 +3,25 @@
 การเปลี่ยนแปลงหลัง Draft v2 ต้องอ้างอิง change request ใน `specs/changes/`
 
 ## [SPEC-EQS-001 Draft v3] - 2569-10-04
-UC-01 ตรวจสอบสถานะอุปกรณ์ | Change request: [CR-001](changes/CR-001.md) (Approved with modification 2569-10-03)
+UC-01 ตรวจสอบสถานะอุปกรณ์ | Change request: [CR-001](changes/CR-001.md) (รับบางส่วน 2569-10-03) | การเจรจา: N-01 ใน [backlog](changes/backlog.md) (2569-10-02)
 
 ### Changed
 - FR-EQS-04: แสดงกำหนดคืนระดับวันที่เฉพาะเมื่อยังไม่เลยกำหนด ถ้าเลยแล้วนักศึกษาเห็นป้าย "เลยกำหนดคืน" แทนวันที่
-  เจ้าหน้าที่/อาจารย์เห็นทั้งวันที่และป้าย ป้ายนี้ไม่ใช่สถานะใหม่
+  เจ้าหน้าที่เห็นทั้งวันที่และป้าย ป้ายนี้ไม่ใช่สถานะใหม่
 - DOM-PRIV-01: เพิ่มป้าย "เลยกำหนดคืน" ในสิ่งที่นักศึกษาเห็นได้
 - AC-EQS-04: ระบุว่ากำหนดคืนแสดงระดับวันที่
 - Q-01: ปิดหลังยืนยันกับเจ้าหน้าที่ภาควิชา
+- Q-02: ปิดตาม N-01 จองล่วงหน้า (BL-11) เป็น Won't เทอมนี้
+- Scope: In scope เพิ่มป้าย "เลยกำหนดคืน" ในรายละเอียดรายชิ้น / Out of scope จองล่วงหน้าอ้าง N-01 แทน Q-02
 - Traceability: FR-EQS-04 อ้างอิง CR-001 และ AC-EQS-14
 
 ### Added
 - AC-EQS-14: กรณีอุปกรณ์เลยกำหนดคืน (มุมมองนักศึกษาเทียบกับเจ้าหน้าที่)
-- Clarifications: Session 2569-10-03 (CR-001)
+- Clarifications: Session 2569-10-02 (N-01), Session 2569-10-03 (CR-001)
+- หัวเอกสาร: อ้างอิง Backlog BL-01 ถึง BL-04
 
 ### Related
-- plan.md Draft v1.1: response รายชิ้นเพิ่ม `isOverdue`, test plan เพิ่ม AC-EQS-14
+- plan.md Draft v1.1: response รายชิ้นเพิ่ม `isOverdue`, test plan เพิ่ม AC-EQS-14, M3 เพิ่ม AC-14
 
 ## [SPEC-EQS-001 Draft v2] - 2569-09-20
 - ปิด Q-01, Q-03; เพิ่ม FR-EQS-09 (รออนุมัติ), FR-EQS-10 / DOM-ACCESS-01 (เฉพาะภาควิชาตนเอง)
