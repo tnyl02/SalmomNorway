@@ -1,12 +1,12 @@
 # Implementation Plan: ตรวจสอบสถานะอุปกรณ์ (Equipment Status)
-Spec: SPEC-EQS-001 (specs/001-equipment-status/spec.md, Draft v3) | Plan status: Draft v1.1 | Updated: 2569-10-04 (CR-001)
+Spec: SPEC-EQS-001 (specs/001-equipment-status/spec.md, Draft v4) | Plan status: Draft v1.3 | Updated: 2569-11-02 (CR-002 ให้ตรงกับ Miro)
 
 ## 1. Summary
 ฟีเจอร์ read-only ให้ผู้ใช้ที่ยืนยันตัวตนแล้วดูรายการอุปกรณ์แบบ "1 แถว = 1 รุ่น/ชนิด"
-(พร้อมให้ยืม/ทั้งหมด) เจาะลงรายชิ้นตามรหัสครุภัณฑ์ ค้นหา/กรอง และดูรายละเอียดตามสิทธิ์
+(ว่าง/ทั้งหมด) เจาะลงรายชิ้นตามรหัสครุภัณฑ์ ค้นหา/กรอง และดูรายละเอียดตามสิทธิ์
 แนวทางหลัก:
 - ฟีเจอร์ไม่เขียนสถานะอุปกรณ์เลย (CON-DATA-02) จึงออกแบบเป็น **read model** บน PostgreSQL
-  ที่ UC-07/08/09/10 เป็นผู้เขียน
+  ที่ UC-07/08/09/10 เป็นผู้เขียน (ดู specs/000-shared/data-model.md)
 - บังคับสิทธิ์ (ภาควิชา, การซ่อนชื่อผู้ยืม) **ที่ฝั่ง server** ทั้งหมด ไม่พึ่งการซ่อนที่หน้าจอ
 - ไม่ทำ cache ในแอป ให้ query ตรงจาก DB เพื่อให้ผ่าน NFR-DATA-01 (คลาดเคลื่อน <= 30 วินาที)
   ข้อมูล 1,000 รายการ + index เพียงพอต่อ NFR-PERF-01
@@ -23,29 +23,32 @@ spec กำหนดไว้เพียง PostgreSQL, HTTPS, Docker (CON-TECH
 | TLS / proxy | nginx หรือ Caddy หน้า API+Web, TLS >= 1.2, HSTS | CON-TECH-02, NFR-SEC-01 |
 | Deploy | Docker Compose บน on-campus server / cloud VM | CON-TECH-02 |
 | Test | go test + testcontainers (integration), Playwright (e2e), k6 (load) | |
-| Auth | รับ token/session จาก auth service (UC-13) | โปรโตคอลยังไม่ระบุ ดู Q-P1 |
+| Auth | รับ token/session จากระบบยืนยันตัวตนของมหาวิทยาลัย (IF-IDP-01) | โปรโตคอลยังไม่ระบุ ดู Q-SH-03, prototype ใช้ auth จำลอง |
 
 Scale: อุปกรณ์ 1,000 ชิ้น, ผู้ใช้พร้อมกัน 50 คน (ขนาดเล็ก ไม่ต้องมี cache/queue/replica)
 
 Constitution check: ยังไม่มี `.specify/memory/constitution.md` ในโปรเจกต์ -> ข้าม
 
 ## 3. Project Structure (proposed)
+ใช้ชื่อโฟลเดอร์ `backend/` และ `frontend/` ตาม template ของรายวิชา เพื่อให้คำสั่ง agent-pack ใช้ได้ (ดูตารางเทียบ Go ใน `AGENTS.md`)
+ของกลาง (`auth/`, `audit/`, `platform/`, `config/`, `db/migrations/`) ใช้ร่วมกับฟีเจอร์ 002-006
 ```
 SalmomNorway/
-  api/
+  backend/
     cmd/server/main.go
     internal/
+      config/      # ค่าที่ตั้งได้จาก spec ที่เดียว (AGENTS.md กฎข้อ 9)
       auth/        # ตรวจ token, สร้าง Principal{userID, role, departmentID}
       equipment/   # handler, service, repository, dto (แยก dto ตาม role)
       audit/       # เขียน audit_log
-      platform/    # config, db pool, http middleware (request id, error mapper)
-  web/
+      platform/    # db pool, http middleware (request id, error mapper)
+    db/migrations/ # 0001_equipment_read_model.sql, 0002_audit_log.sql, ...
+  frontend/
     src/pages/EquipmentList, EquipmentDetail
     src/components/StatusBadge, ModelRow, ItemTable, EmptyState, ErrorState
-  db/migrations/   # 0001_equipment_read_model.sql, 0002_audit_log.sql, ...
   deploy/          # docker-compose.yml, nginx.conf
   tests/           # e2e (Playwright), load (k6)
-  specs/001-equipment-status/{spec.md, plan.md}
+  specs/001-equipment-status/{spec.md, plan.md, tasks.md}
 ```
 
 ## 4. Data Model
@@ -61,9 +64,9 @@ equipment_item(
   asset_code TEXT UNIQUE NOT NULL,                      -- CON-DATA-03
   model_id FK,
   status TEXT NOT NULL CHECK (status IN
-    ('available','pending_approval','borrowed','maintenance','damaged','lost')),  -- CON-DATA-01
+    ('available','borrowed','unavailable')),                -- CON-DATA-01 (CR-002)
   updated_at TIMESTAMPTZ NOT NULL)
-loan(id PK, item_id FK, borrower_id, expected_return_date, returned_at NULL)   -- เขียนโดย UC-08/09
+loan(id PK, item_id FK, borrower_id, loan_type, due_at TIMESTAMPTZ, returned_at NULL)   -- เขียนโดย UC-08/09 (CR-002: กำหนดคืนมีเวลา)
 ```
 
 View สำหรับอ่าน (ซ่อน join ไว้ที่เดียว):
@@ -71,11 +74,11 @@ View สำหรับอ่าน (ซ่อน join ไว้ที่เด�
 v_equipment_item_status =
   item + model + category + department
   + LEFT JOIN loan ON loan.item_id = item.id AND loan.returned_at IS NULL
-  -> expected_return_date, borrower_id   (มีค่าเฉพาะสถานะ borrowed)
+  -> due_at, borrower_id   (มีค่าเฉพาะสถานะ borrowed)
 ```
 
 Index:
-- `equipment_item(model_id, status)` -- นับพร้อมให้ยืม/ทั้งหมดต่อรุ่น
+- `equipment_item(model_id, status)` -- นับว่าง/ทั้งหมดต่อรุ่น
 - `equipment_model(department_id, category_id)` -- scope ตามภาควิชา + กรองประเภท
 - `pg_trgm` GIN บน `equipment_model.name` และ `equipment_item.asset_code` -- ค้นหา ILIKE
 - `loan(item_id) WHERE returned_at IS NULL` (partial)
@@ -94,18 +97,18 @@ audit_log(id, actor_id, actor_role, occurred_at, action CHECK IN ('list','search
 | `GET /api/v1/equipment/models?q=&category=&status=&department=&page=&pageSize=` | FR-01, 02, 03, 09, 10 | 1 แถว = 1 รุ่น |
 | `GET /api/v1/equipment/models/{modelId}/items?q=&status=` | FR-01, 04, 05, 06, 07, 09 | รายชิ้นตามรหัสครุภัณฑ์ |
 | `GET /api/v1/equipment/items/{assetCode}` | FR-04-07, 09, 10 | รายละเอียดรายชิ้น |
-| `GET /api/v1/equipment/summary` | FR-07 | เฉพาะ staff/lecturer, นับตามสถานะ |
+| `GET /api/v1/equipment/summary` | FR-07 | เฉพาะ staff, นับตามสถานะ |
 
 Response (ตัวอย่างแถวรุ่น): `{modelId, name, category, availableCount, totalCount}`
-- `availableCount` นับเฉพาะ `status='available'` (ไม่นับ pending_approval ตาม FR-09)
+- `availableCount` นับเฉพาะ `status='available'` (สถานะ "ว่าง") ยังไม่รู้ว่าอุปกรณ์ที่มีคำขอค้างนับไหม (Q-SH-01)
 - `availableCount/totalCount` คำนวณจากทั้งรุ่นเสมอ ไม่ถูกลดตามตัวกรอง (ดู Q-P2)
 
-Response (รายชิ้น): `{assetCode, status, expectedReturnDate?, isOverdue?, canRequestLoan, borrowerName?}`
-- `canRequestLoan = (status == 'available')` คำนวณที่ server ตาม FR-04/05/06/09
-- `isOverdue = (status == 'borrowed' && today(Asia/Bangkok) > expectedReturnDate)` คำนวณที่ server (CR-001)
-- `expectedReturnDate` (ระดับวันที่) ส่งเฉพาะ `borrowed`; DTO ของ student **ไม่ส่ง** เมื่อ `isOverdue` (FR-04, CR-001)
-  ส่วน staff/lecturer ได้ทั้งวันที่และ `isOverdue`
-- `borrowerName` **ไม่อยู่ใน DTO ของ student** (แยก struct ตาม role) มีเฉพาะ staff/lecturer (DOM-PRIV-01, FR-07)
+Response (รายชิ้น): `{assetCode, status, dueAt?, isOverdue?, canRequestLoan, borrowerName?}`
+- `canRequestLoan = (status == 'available')` คำนวณที่ server ตาม FR-04/05/06
+- `isOverdue = (status == 'borrowed' && now(Asia/Bangkok) > dueAt)` เทียบวันที่และเวลา คำนวณที่ server (CR-001, CR-002)
+- `dueAt` (วันที่และเวลา) ส่งเฉพาะ `borrowed`; DTO ของ student **ไม่ส่ง** เมื่อ `isOverdue` (FR-04, CR-001)
+  ส่วน staff ได้ทั้ง `dueAt` และ `isOverdue`
+- `borrowerName` **ไม่อยู่ใน DTO ของ student** (แยก struct ตาม role) มีเฉพาะ staff (DOM-PRIV-01, FR-07)
 
 Error contract:
 | กรณี | HTTP | body | อ้างอิง |
@@ -127,7 +130,7 @@ UC-02 ต้องตรวจสถานะซ้ำที่ฝั่งต�
   ถ้า request ระบุ `department` อื่น หรือ `assetCode` ของภาควิชาอื่น -> 403 (`FORBIDDEN_DEPARTMENT`)
   ตามที่ AC-13 กำหนดให้แจ้ง "ไม่มีสิทธิ์" และไม่ส่งข้อมูลกลับ
   (ข้อแลกเปลี่ยน: 403 บอกได้ว่ารหัสนั้นมีอยู่จริง แต่ spec สั่งให้แจ้งไม่มีสิทธิ์ จึงคงตาม spec)
-- Staff/Lecturer: ขอบเขตภาควิชายังไม่ระบุใน spec (ดู Q-P3) ชั่วคราวให้เห็นทุกภาควิชา และเก็บเป็น policy เดียวในโค้ด
+- Staff: ขอบเขตภาควิชายังไม่ระบุใน spec (ดู Q-P3) ชั่วคราวให้เห็นทุกภาควิชา และเก็บเป็น policy เดียวในโค้ด
   (`scopeFor(principal)`) เพื่อแก้จุดเดียวได้
 - DTO แยกตาม role (`StudentItemDTO` / `StaffItemDTO`) -- ฟิลด์ที่นักศึกษาไม่มีสิทธิ์ไม่มีอยู่ใน struct
   ป้องกันการหลุดโดยไม่ตั้งใจ
@@ -166,7 +169,7 @@ UC-02 ต้องตรวจสถานะซ้ำที่ฝั่งต�
 
 ### 6.7 UI (NFR-USE-01)
 - mobile-first: รายการรุ่นเป็นการ์ด/แถวที่กดเจาะได้, ช่องค้นหาอยู่บนสุด, ตัวกรองเป็น chip
-- `StatusBadge` ใช้สี **และ** ข้อความ/ไอคอนแยกกันสำหรับทั้ง 6 สถานะ (FR-05, FR-09) ไม่พึ่งสีอย่างเดียว
+- `StatusBadge` ใช้ข้อความแยกกันสำหรับ 3 สถานะ (CON-DATA-01, FR-05) และป้าย "เลยกำหนดคืน" (FR-04)
 - ปุ่ม "ส่งคำขอยืม" แสดงเมื่อ `canRequestLoan == true` เท่านั้น (ค่ามาจาก server)
 
 ## 7. Test Plan (Traceability กับ AC)
@@ -178,15 +181,14 @@ UC-02 ต้องตรวจสถานะซ้ำที่ฝั่งต�
 | AC-EQS-03 | e2e | ไม่พบ -> ข้อความ + ปุ่มล้างตัวกรอง |
 | AC-EQS-04 | integration | ตั้ง borrowed (จำลอง UC-08) -> เห็นกำหนดคืน ไม่มี canRequestLoan |
 | AC-EQS-05 | integration | ปิด loan (จำลอง UC-09) -> refresh <= 30 วินาที กลับ available |
-| AC-EQS-06 | integration + e2e | damaged -> ป้ายแยก ไม่มีปุ่ม |
+| AC-EQS-06 | integration + e2e | unavailable -> ป้าย "ไม่พร้อมใช้งาน" ไม่มีปุ่ม |
 | AC-EQS-07 | integration | response student ไม่มีชื่อผู้ยืม / staff มี |
 | AC-EQS-08 | integration + e2e | หยุด DB -> 503 + ปุ่มลองใหม่ ไม่มีข้อมูลเก่า |
 | AC-EQS-09 | e2e | 401 -> หน้า login -> กลับหน้าเดิม |
-| AC-EQS-10 | load (k6) | 1,000 รายการ, 50 VU, p95 <= 2 วินาที |
+| AC-EQS-10 | load (k6) | 1,000 รายการ, 50 VU, p95 <= 3 วินาที |
 | AC-EQS-11 | integration | มีแถว audit_log ครบ actor/เวลา/assetCode |
-| AC-EQS-12 | integration + e2e | pending_approval -> ป้ายแยก ไม่นับใน availableCount |
 | AC-EQS-13 | integration | ต่างภาควิชา -> 403 และ body ไม่มีข้อมูลอุปกรณ์ทั้งจาก list และ detail ตรง |
-| AC-EQS-14 | integration + e2e | borrowed เลยกำหนด (fix clock) -> student ได้ `isOverdue` ไม่มี `expectedReturnDate` / staff ได้ทั้งคู่; ป้าย "เลยกำหนดคืน" |
+| AC-EQS-14 | integration + e2e | borrowed เลยกำหนด (fix clock) -> student ได้ `isOverdue` ไม่มี `dueAt` / staff ได้ทั้งคู่ (กำหนดคืน 16:00 เวลาปัจจุบัน 17:00 วันเดียวกัน); ป้าย "เลยกำหนดคืน" |
 
 ทดสอบเพิ่ม: DTO นักศึกษา (ไม่หลุดฟิลด์ borrower), `returnTo` ภายนอกระบบถูกปฏิเสธ, SQL injection ผ่าน `q`
 
@@ -199,13 +201,13 @@ UC-02 ต้องตรวจสถานะซ้ำที่ฝั่งต�
 
 ## 9. Risks & Dependencies
 - **ตารางจาก UC-08/09/10 ยังไม่มี**: schema ในข้อ 4 เป็นข้อสมมติ ต้องตกลงกับเจ้าของ UC เหล่านั้นก่อน freeze
-- **auth service (UC-13)**: ต้องยืนยันโปรโตคอลและต้องส่ง `departmentID` กลับมา (IF-IDP-01) ไม่มีจะทำ DOM-ACCESS-01 ไม่ได้
+- **ระบบยืนยันตัวตน (IF-IDP-01)**: ต้องยืนยันโปรโตคอลและต้องส่ง `departmentID` กลับมา (IF-IDP-01) ไม่มีจะทำ DOM-ACCESS-01 ไม่ได้
 - **NFR-DATA-01** ตั้งอยู่บนข้อสมมติว่า UC-07-10 เขียน DB ทันที (ไม่มี batch/ล่าช้า)
 
-## 10. Open Points ที่ต้องยืนยัน (นอกเหนือจาก Q-02, Q-04 ใน spec)
+## 10. Open Points ที่ต้องยืนยัน (นอกเหนือจาก Q-04 ใน spec)
 - **Q-P1** auth service ใช้โปรโตคอลอะไร (OIDC / SAML / token ภายใน) และส่ง role + department มาในรูปแบบใด
-- **Q-P2** ตัวเลข "พร้อมให้ยืม/ทั้งหมด" ควรคงที่ทั้งรุ่น (ที่เสนอ) หรือเปลี่ยนตามตัวกรอง
-- **Q-P3** เจ้าหน้าที่/อาจารย์เห็นทุกภาควิชา หรือเฉพาะภาควิชาของตน (spec ระบุเฉพาะนักศึกษา)
+  (ย้ายไปเป็น Q-SH-03 ใน specs/000-shared/constraints.md เพราะกระทบทุกฟีเจอร์)
+- **Q-P2** ตัวเลข "ว่าง/ทั้งหมด" ควรคงที่ทั้งรุ่น (ที่เสนอ) หรือเปลี่ยนตามตัวกรอง
+- **Q-P3** เจ้าหน้าที่เห็นทุกภาควิชา หรือเฉพาะภาควิชาของตน (spec ระบุเฉพาะนักศึกษา)
 - **Q-P4** เขียน audit ไม่สำเร็จ ควรบล็อกการแสดงข้อมูล (fail closed ที่เสนอ) หรือปล่อยผ่านแล้วแจ้งเตือน
-- **Q-P5** "กำหนดคืนโดยประมาณ" มาจากไหน (ฟิลด์ใน loan ที่ UC-08 กำหนด หรือคำนวณจากนโยบายจำนวนวันยืม)
-- Q-01 ที่ spec แนะนำให้ยืนยันกับเจ้าหน้าที่ภาควิชาอีกครั้งก่อน freeze spec ยังค้างอยู่
+- **Q-P5** [ปิดแล้ว CR-002: กำหนดคืนบันทึกตอนส่งมอบ ยืมปกติ 16:00 ตาม DOM-LOAN-01] "กำหนดคืนโดยประมาณ" มาจากไหน (ฟิลด์ใน loan ที่ UC-08 กำหนด หรือคำนวณจากนโยบายจำนวนวันยืม)
